@@ -1,0 +1,7 @@
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { leonisEmbed, COLORS } from '../systems/embeds.js';
+export const adminCommands=[
+ {data:new SlashCommandBuilder().setName('limpar').setDescription('Apaga mensagens.').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages).addIntegerOption(o=>o.setName('quantidade').setDescription('1 a 100').setRequired(true).setMinValue(1).setMaxValue(100)),async execute(i){const n=i.options.getInteger('quantidade',true);const deleted=await i.channel.bulkDelete(n,true);await i.reply({embeds:[leonisEmbed({title:'🧹 Limpeza concluída',description:`Foram apagadas **${deleted.size}** mensagens.`,color:COLORS.success})],ephemeral:true})}},
+ {data:new SlashCommandBuilder().setName('trancar').setDescription('Tranca o canal.').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),async execute(i){await i.channel.permissionOverwrites.edit(i.guild.roles.everyone,{SendMessages:false});await i.reply({embeds:[leonisEmbed({title:'🔒 Canal trancado',description:'O Leonis trancou este canal.',color:COLORS.warning})]})}},
+ {data:new SlashCommandBuilder().setName('destrancar').setDescription('Destranca o canal.').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),async execute(i){await i.channel.permissionOverwrites.edit(i.guild.roles.everyone,{SendMessages:null});await i.reply({embeds:[leonisEmbed({title:'🔓 Canal aberto',description:'O Leonis destrancou este canal.',color:COLORS.success})]})}},
+];
