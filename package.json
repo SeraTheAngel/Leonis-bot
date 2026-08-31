@@ -1,0 +1,18 @@
+{
+  "name": "leonis-bot",
+  "version": "0.1.0",
+  "description": "Leonis — Discord bot multifuncional com foco em segurança, moderação, diversão e administração.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.1"
+  }
+}
