@@ -27,6 +27,13 @@ export function getGuildConfig(guildId) {
   return db[guildId];
 }
 
+export function updateGuildConfig(guildId, updater) {
+  const guild = getGuildConfig(guildId);
+  updater(guild);
+  save();
+  return guild;
+}
+
 function serialiseMessage(message) {
   return {
     id: message.id,
@@ -39,6 +46,7 @@ function serialiseMessage(message) {
 }
 
 export function recordMessage(message, event, oldContent = null) {
+  if (!message.guild) return;
   const guild = getGuildConfig(message.guild.id);
   guild.lastEvents ??= [];
   guild.lastEvents.push({ event, oldContent, message: serialiseMessage(message) });
@@ -52,4 +60,27 @@ export function recordMemberEvent(guildId, event, userId, tag) {
   guild.lastEvents.push({ event, userId, tag, timestamp: new Date().toISOString() });
   guild.lastEvents = guild.lastEvents.slice(-500);
   save();
+}
+
+export function addKeyword(guildId, trigger, response = null) {
+  const guild = getGuildConfig(guildId);
+  const normalized = trigger.trim().toLocaleLowerCase('pt-BR');
+  guild.keywords = guild.keywords.filter(k => k.trigger !== normalized);
+  guild.keywords.push({ trigger: normalized, response });
+  save();
+}
+
+export function removeKeyword(guildId, trigger) {
+  const guild = getGuildConfig(guildId);
+  const normalized = trigger.trim().toLocaleLowerCase('pt-BR');
+  const before = guild.keywords.length;
+  guild.keywords = guild.keywords.filter(k => k.trigger !== normalized);
+  save();
+  return before !== guild.keywords.length;
+}
+
+export function findKeyword(guildId, content) {
+  const guild = getGuildConfig(guildId);
+  const text = content.toLocaleLowerCase('pt-BR');
+  return guild.keywords.find(k => text.includes(k.trigger)) ?? null;
 }
