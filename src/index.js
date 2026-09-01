@@ -1,23 +1,128 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, Partials, Events, Collection } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events, Collection, AuditLogEvent } from 'discord.js';
 import { actionCommand } from './commands/actions.js';
 import { utilityCommands } from './commands/utility.js';
 import { moderationCommands } from './commands/moderation.js';
 import { adminCommands } from './commands/admin.js';
 import { gameCommands } from './commands/games.js';
-import { recordMessage, recordMemberEvent, getGuildConfig } from './systems/storage.js';
+import { recordMessage, recordMemberEvent, getGuildConfig, findKeyword } from './systems/storage.js';
 import { isBlockedInvite } from './systems/security.js';
 import { leonisEmbed, COLORS } from './systems/embeds.js';
 import { handlePrefixMessage } from './commands/prefix.js';
-const client=new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMembers,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent,GatewayIntentBits.GuildModeration],partials:[Partials.Message,Partials.Channel,Partials.GuildMember]});
-client.commands=new Collection();
-[actionCommand,...utilityCommands,...moderationCommands,...adminCommands,...gameCommands].forEach(c=>client.commands.set(c.data.name,c));
-const recentMessages=new Map(),joinBursts=new Map();
-client.once(Events.ClientReady,bot=>console.log(`🦁 Leonis online como ${bot.user.tag} • ${client.commands.size} comandos • prefixo ${process.env.PREFIX||'l!'}`));
-client.on(Events.MessageCreate,async m=>{if(!m.guild||m.author.bot)return;const c=getGuildConfig(m.guild.id);if(c.security.blockInvites&&isBlockedInvite(m.content)){try{await m.delete();}catch{}recordMessage(m,'blocked-invite');return}if(c.security.antiFlood){const now=Date.now(),key=`${m.guild.id}:${m.author.id}`,e=(recentMessages.get(key)||[]).filter(t=>now-t<8000);e.push(now);recentMessages.set(key,e);if(e.length>=c.security.floodThreshold)try{await m.member.timeout(10000,'Leonis anti-flood')}catch{}}recordMessage(m,'created');try{await handlePrefixMessage(m,client)}catch(e){console.error('Prefix command error:',e);if(m.content.startsWith(process.env.PREFIX||'l!'))await m.reply({embeds:[leonisEmbed({title:'❌ Erro',description:'O Leonis não conseguiu executar esse comando.',color:COLORS.danger})]});}});
-client.on(Events.GuildMemberAdd,async m=>{recordMemberEvent(m.guild.id,'join',m.user.id,m.user.tag);const c=getGuildConfig(m.guild.id);if(!c.security.antiRaid)return;const now=Date.now(),e=(joinBursts.get(m.guild.id)||[]).filter(t=>now-t<15000);e.push(now);joinBursts.set(m.guild.id,e);if(e.length>=c.security.joinThreshold)try{await Promise.all(m.guild.channels.cache.map(ch=>ch.isTextBased()?ch.setRateLimitPerUser(10,'Leonis anti-raid'):null))}catch{}});
-client.on(Events.GuildMemberRemove,m=>recordMemberEvent(m.guild.id,'leave',m.user?.id??m.id,m.user?.tag??m.id));
-client.on(Events.MessageDelete,m=>{if(m.guild)recordMessage(m,'deleted')});
-client.on(Events.MessageUpdate,(o,n)=>{if(n.guild&&o.content!==n.content)recordMessage(n,'edited',o.content)});
-client.on(Events.InteractionCreate,async i=>{if(!i.isChatInputCommand())return;const c=client.commands.get(i.commandName);if(!c)return;try{await c.execute(i)}catch(e){console.error(e);const p={embeds:[leonisEmbed({title:'❌ Erro',description:'O Leonis tropeçou feio aqui. Tenta novamente.',color:COLORS.danger})],ephemeral:true};if(i.replied||i.deferred)await i.followUp(p);else await i.reply(p)}});
-if(!process.env.DISCORD_TOKEN)throw new Error('DISCORD_TOKEN não configurado.');client.login(process.env.DISCORD_TOKEN);
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildModeration],
+  partials: [Partials.Message, Partials.Channel, Partials.GuildMember],
+});
+
+client.commands = new Collection();
+[actionCommand, ...utilityCommands, ...moderationCommands, ...adminCommands, ...gameCommands].forEach(c => client.commands.set(c.data.name, c));
+const recentMessages = new Map();
+const joinBursts = new Map();
+
+async function sendLog(guild, { title, description, color = COLORS.normal }) {
+  const channelId = getGuildConfig(guild.id).logs.channelId;
+  if (!channelId) return;
+  const channel = guild.channels.cache.get(channelId) ?? await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel?.isTextBased()) return;
+  await channel.send({ embeds: [leonisEmbed({ title, description, color })] }).catch(() => {});
+}
+
+client.once(Events.ClientReady, bot => console.log(`🦁 Leonis online como ${bot.user.tag} • ${client.commands.size} comandos • prefixo ${process.env.PREFIX || 'l!'}`));
+
+client.on(Events.MessageCreate, async m => {
+  if (!m.guild || m.author.bot) return;
+  const c = getGuildConfig(m.guild.id);
+
+  if (c.security.blockInvites && isBlockedInvite(m.content)) {
+    try { await m.delete(); } catch {}
+    recordMessage(m, 'blocked-invite');
+    await sendLog(m.guild, { title: '🛡️ Convite bloqueado', description: `Uma mensagem de **${m.author.tag}** contendo um convite foi removida.\nCanal: ${m.channel}`, color: COLORS.warning });
+    return;
+  }
+
+  if (c.security.antiFlood) {
+    const now = Date.now();
+    const key = `${m.guild.id}:${m.author.id}`;
+    const e = (recentMessages.get(key) || []).filter(t => now - t < 8000);
+    e.push(now);
+    recentMessages.set(key, e);
+    if (e.length >= c.security.floodThreshold) try { await m.member.timeout(10000, 'Leonis anti-flood'); } catch {}
+  }
+
+  recordMessage(m, 'created');
+  const keyword = findKeyword(m.guild.id, m.content);
+  if (keyword) {
+    try { await m.react('🦁'); } catch {}
+    if (keyword.response) await m.reply({ embeds: [leonisEmbed({ title: '🦁 Leonis', description: keyword.response, color: COLORS.anime })] }).catch(() => {});
+  }
+
+  try { await handlePrefixMessage(m, client); }
+  catch (e) {
+    console.error('Prefix command error:', e);
+    if (m.content.startsWith(process.env.PREFIX || 'l!')) await m.reply({ embeds: [leonisEmbed({ title: '❌ Erro', description: 'O Leonis não conseguiu executar esse comando.', color: COLORS.danger })] }).catch(() => {});
+  }
+});
+
+client.on(Events.GuildMemberAdd, async m => {
+  recordMemberEvent(m.guild.id, 'join', m.user.id, m.user.tag);
+  const c = getGuildConfig(m.guild.id);
+  if (c.welcome.enabled && c.welcome.channelId) {
+    const channel = m.guild.channels.cache.get(c.welcome.channelId) ?? await m.guild.channels.fetch(c.welcome.channelId).catch(() => null);
+    if (channel?.isTextBased()) {
+      const text = c.welcome.message.replaceAll('{user}', `${m}`).replaceAll('{server}', m.guild.name);
+      await channel.send({ embeds: [leonisEmbed({ title: '👋 Bem-vindo(a)!', description: text, image: m.user.displayAvatarURL({ size: 512 }), color: COLORS.success })] }).catch(() => {});
+    }
+  }
+  await sendLog(m.guild, { title: '📥 Membro entrou', description: `**${m.user.tag}** entrou no servidor.\nID: \`${m.user.id}\``, color: COLORS.success });
+
+  if (!c.security.antiRaid) return;
+  const now = Date.now();
+  const e = (joinBursts.get(m.guild.id) || []).filter(t => now - t < 15000);
+  e.push(now);
+  joinBursts.set(m.guild.id, e);
+  if (e.length >= c.security.joinThreshold) {
+    try { await Promise.all(m.guild.channels.cache.map(ch => ch.isTextBased() ? ch.setRateLimitPerUser(10, 'Leonis anti-raid') : null)); } catch {}
+    await sendLog(m.guild, { title: '🚨 Possível raid detectada', description: `**${e.length}** entradas em 15 segundos. O Leonis aplicou slowmode preventivo nos canais de texto.`, color: COLORS.danger });
+  }
+});
+
+client.on(Events.GuildMemberRemove, async m => {
+  recordMemberEvent(m.guild.id, 'leave', m.user?.id ?? m.id, m.user?.tag ?? m.id);
+  await sendLog(m.guild, { title: '📤 Membro saiu', description: `**${m.user?.tag ?? m.id}** saiu do servidor.`, color: COLORS.warning });
+});
+
+client.on(Events.MessageDelete, async m => {
+  if (!m.guild) return;
+  recordMessage(m, 'deleted');
+  let moderator = 'Não identificado';
+  try {
+    const logs = await m.guild.fetchAuditLogs({ type: AuditLogEvent.MessageDelete, limit: 5 });
+    const entry = logs.entries.find(e => e.target?.id === m.author?.id && Date.now() - e.createdTimestamp < 5000);
+    if (entry?.executor) moderator = entry.executor.tag;
+  } catch {}
+  const content = m.content ? m.content.slice(0, 900) : '[texto não disponível no cache]';
+  const attachments = [...(m.attachments?.values?.() ?? [])].map(a => a.url).join('\n');
+  await sendLog(m.guild, { title: '🗑️ Mensagem apagada', description: `**Autor:** ${m.author?.tag ?? 'desconhecido'}\n**Canal:** ${m.channel}\n**Por:** ${moderator}\n\n**Conteúdo:** ${content}${attachments ? `\n\n**Anexos:**\n${attachments}` : ''}`, color: COLORS.warning });
+});
+
+client.on(Events.MessageUpdate, async (o, n) => {
+  if (!n.guild || o.content === n.content) return;
+  recordMessage(n, 'edited', o.content);
+  await sendLog(n.guild, { title: '✏️ Mensagem editada', description: `**Autor:** ${n.author?.tag ?? 'desconhecido'}\n**Canal:** ${n.channel}\n\n**Antes:** ${o.content || '[vazio]'}\n**Depois:** ${n.content || '[vazio]'}`, color: COLORS.normal });
+});
+
+client.on(Events.InteractionCreate, async i => {
+  if (!i.isChatInputCommand()) return;
+  const c = client.commands.get(i.commandName);
+  if (!c) return;
+  try { await c.execute(i); }
+  catch (e) {
+    console.error(e);
+    const p = { embeds: [leonisEmbed({ title: '❌ Erro', description: 'O Leonis tropeçou feio aqui. Tenta novamente.', color: COLORS.danger })], ephemeral: true };
+    if (i.replied || i.deferred) await i.followUp(p); else await i.reply(p);
+  }
+});
+
+if (!process.env.DISCORD_TOKEN) throw new Error('DISCORD_TOKEN não configurado.');
+client.login(process.env.DISCORD_TOKEN);
